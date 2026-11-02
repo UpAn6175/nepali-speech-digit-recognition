@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speech Digit Recognition</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="hero">
+    <nav class="nav wrap">
+      <span class="brand">
+        <img src="{{ url_for('static', filename='assets/favicon.svg') }}" alt="" width="28" height="28">
+        Speech Digit Recognition
+      </span>
+      <a class="nav-link" href="#how">How it works</a>
+    </nav>
+    <div class="wrap hero-body">
+      <p class="eyebrow">Machine learning project</p>
+      <h1>Recognise spoken numbers from audio</h1>
+      <p class="lead">
+        Upload or record one spoken number. The server extracts MFCC features with
+        the same librosa pipeline used in training and the trained model predicts which number was said.
+      </p>
+      <ul class="chips">
+        <li>librosa MFCC features</li>
+        <li>LSTM · SVM · Random Forest</li>
+        <li>Nepali numbers 1–100</li>
+      </ul>
+    </div>
+  </header>
+
+  <main class="wrap main">
+    {% set ready = models | selectattr('ready') | list %}
+    {% if not ready %}
+    <div class="banner warn" role="status">
+      <strong>No trained model is loaded yet.</strong>
+      Copy your saved model files into the <code>models/</code> folder and restart the server.
+      The README lists the exact file names.
+    </div>
+    {% endif %}
+
+    <section class="grid">
+      <!-- Upload -->
+      <div class="card">
+        <h2 class="card-title"><span class="step">1</span> Upload or record audio</h2>
+
+        <div class="tabs" role="tablist" aria-label="Audio source">
+          <button class="tab active" id="tab-upload" type="button" role="tab" aria-selected="true" aria-controls="dropzone">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Upload file
+          </button>
+          <button class="tab" id="tab-record" type="button" role="tab" aria-selected="false" aria-controls="recorder">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            Record
+          </button>
+        </div>
+
+        <div id="recorder" class="recorder" hidden>
+          <button id="record-btn" class="record-btn" type="button" aria-label="Start recording">
+            <span class="record-dot"></span>
+          </button>
+          <div class="rec-status">
+            <span id="rec-label" class="rec-label">Click the button and say one number</span>
+            <span id="rec-sub" class="rec-sub">Recording stops automatically after 3 seconds</span>
+          </div>
+          <div class="rec-meter" aria-hidden="true"><div id="rec-level" class="rec-level"></div></div>
+        </div>
+
+        <label id="dropzone" class="dropzone" for="file-input" tabindex="0">
+          <input id="file-input" type="file" accept="{% for e in allowed %}.{{ e }}{% if not loop.last %},{% endif %}{% endfor %},audio/*" hidden>
+          <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="dz-main">Drag and drop an audio file here</span>
+          <span class="dz-sub">or <span class="link">choose a file</span> · {{ allowed | map('upper') | join(', ') }} · up to {{ max_mb }} MB</span>
+        </label>
+
+        <div id="file-panel" class="file-panel" hidden>
+          <div class="file-row">
+            <div class="file-meta">
+              <span id="file-name" class="file-name"></span>
+              <span id="file-size" class="file-size"></span>
+            </div>
+            <button id="change-btn" class="btn ghost small" type="button">Change</button>
+          </div>
+          <canvas id="waveform" class="waveform" height="72" aria-label="Waveform of the uploaded audio"></canvas>
+          <audio id="player" controls preload="metadata"></audio>
+        </div>
+
+        <div class="field">
+          <label for="model-select">Model</label>
+          <select id="model-select" {% if not ready %}disabled{% endif %}>
+            {% for m in models %}
+            <option value="{{ m.key }}" {% if not m.ready %}disabled{% endif %} {% if m.key == default_model %}selected{% endif %}>
+              {{ m.name }}{% if m.ready %} — {{ '%.1f' % (m.accuracy * 100) }}% test accuracy{% else %} (not available){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="actions">
+          <button id="predict-btn" class="btn primary" type="button" disabled>
+            <span class="btn-label">Predict Digit</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+          <button id="clear-btn" class="btn ghost" type="button" disabled>Clear</button>
+        </div>
+
+        <div id="error" class="banner error" role="alert" hidden></div>
+      </div>
+
+      <!-- Result -->
+      <div class="card result-card" aria-live="polite">
+        <h2 class="card-title"><span class="step">2</span> Prediction</h2>
+
+        <div id="result-empty" class="result-empty">
+          <div class="placeholder-digit">?</div>
+          <p>Upload or record a clip, then press <strong>Predict Digit</strong> to see the result.</p>
+        </div>
+
+        <div id="result-loading" class="result-empty" hidden>
+          <div class="pulse"></div>
+          <p>Extracting MFCC features and running the model…</p>
+        </div>
+
+        <div id="result" hidden>
+          <p class="result-label">Predicted number</p>
+          <div id="result-digit" class="result-digit"></div>
+          <div id="confidence-block">
+            <div class="conf-row">
+              <span>Confidence</span>
+              <strong id="confidence-value"></strong>
+            </div>
+            <div class="meter"><div id="confidence-bar" class="meter-fill"></div></div>
+          </div>
+          <p id="no-proba" class="note" hidden>
+            This model was trained without probability estimates, so only the predicted label is shown.
+          </p>
+
+          <div id="topk-block">
+            <h3 class="sub-title">Top 5 candidates</h3>
+            <ol id="topk" class="topk"></ol>
+          </div>
+
+          <dl class="meta">
+            <div><dt>Model</dt><dd id="meta-model"></dd></div>
+            <div><dt>Clip length</dt><dd id="meta-duration"></dd></div>
+            <div><dt>Sample rate</dt><dd id="meta-sr"></dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how" class="how">
+      <h2>How it works</h2>
+      <p class="section-lead">The website runs the same steps as the training notebook. Nothing is hard-coded and the model is not retrained per request.</p>
+      <ol class="pipeline">
+        <li><span class="pi">1</span><strong>Upload or record</strong><span>The browser sends the WAV file (uploaded, or recorded with the microphone) to the Flask backend.</span></li>
+        <li><span class="pi">2</span><strong>Load audio</strong><span>librosa resamples to the rate used in training (22,050 Hz for the LSTM) and keeps the first second.</span></li>
+        <li><span class="pi">3</span><strong>MFCC features</strong><span>40 MFCCs per frame (n_fft 2048, hop 512), zero-padded to the 44 frames seen in training.</span></li>
+        <li><span class="pi">4</span><strong>Model</strong><span>The trained network, loaded once at startup, outputs a probability for each of the 100 classes.</span></li>
+        <li><span class="pi">5</span><strong>Result</strong><span>The highest-probability class is mapped back to its number and shown with the top 5 candidates.</span></li>
+      </ol>
+
+      <div class="table-wrap">
+        <table class="models">
+          <thead><tr><th>Model</th><th>Features</th><th>Test accuracy</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for m in models %}
+            <tr>
+              <td><strong>{{ m.name }}</strong><br><span class="muted">{{ m.notebook }}</span></td>
+              <td>{{ m.features }}</td>
+              <td>{{ '%.2f' % (m.accuracy * 100) }}%</td>
+              <td>{% if m.ready %}<span class="status ok">Loaded</span>{% else %}<span class="status off" title="{{ m.error }}">Not available</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer wrap">
+    Speech Digit Recognition · Flask + librosa + TensorFlow / scikit-learn
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
